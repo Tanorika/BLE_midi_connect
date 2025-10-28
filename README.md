@@ -33,7 +33,6 @@ pip install bleak mido PyQt5 python-rtmidi
 
 ### 2. 安装虚拟MIDI端口（可选）
 - 下载安装 [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)
-- 或使用 [MIDIberry](https://www.microsoft.com/store/productId/9NBLGGH69D85) 创建的端口
 
 ### 3. 下载项目文件
 - `ble_midi_client.py` - BLE MIDI核心客户端
