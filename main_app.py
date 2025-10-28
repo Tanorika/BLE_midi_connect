@@ -121,11 +121,6 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("就绪 - 点击'开始连接'启动")
         status_layout.addWidget(self.status_label)
         
-        self.activity_text = QTextEdit()
-        self.activity_text.setMaximumHeight(120)
-        self.activity_text.setReadOnly(True)
-        status_layout.addWidget(self.activity_text)
-        
         layout.addWidget(status_group)
         
         # 日志组
