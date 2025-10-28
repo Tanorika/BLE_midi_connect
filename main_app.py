@@ -3,12 +3,19 @@ import os
 import json
 import threading
 import time
-from PyQt5.QtCore import Qt, QTimer
+import logging
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                             QWidget, QLabel, QPushButton, QTextEdit, QComboBox,
                             QCheckBox, QGroupBox)
 import asyncio
 from ble_midi_client import start_ble_midi_bridge, MidiPortManager
+
+# 创建线程安全的信号类
+class BridgeSignals(QObject):
+    status_signal = pyqtSignal(str)
+    activity_signal = pyqtSignal(str)
+    log_signal = pyqtSignal(str)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -17,7 +24,15 @@ class MainWindow(QMainWindow):
         self.bridge_loop = None
         self.is_running = False
         self.config = self.load_config()
+        
+        # 创建信号对象
+        self.signals = BridgeSignals()
+        self.signals.status_signal.connect(self.update_status_ui)
+        self.signals.activity_signal.connect(self.update_activity_ui)
+        self.signals.log_signal.connect(self.update_log_ui)
+        
         self.init_ui()
+        self.setup_logging()
         
     def load_config(self):
         """加载配置文件"""
@@ -35,7 +50,7 @@ class MainWindow(QMainWindow):
         
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("FP-18 BLE MIDI 转发器")
+        self.setWindowTitle("BLE MIDI 转发器")
         self.setGeometry(100, 100, 600, 500)
         
         # 中央部件
@@ -122,38 +137,38 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_text)
         
         layout.addWidget(log_group)
-        
-        # 启动日志重定向
-        self.setup_logging()
     
     def setup_logging(self):
-        """设置日志重定向到文本框"""
-        import logging
-        class TextEditHandler(logging.Handler):
-            def __init__(self, text_widget):
+        """设置日志重定向"""
+        # 清除之前的处理器
+        logger = logging.getLogger()
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        
+        # 设置根日志级别
+        logger.setLevel(logging.INFO)
+        
+        class SignalLogHandler(logging.Handler):
+            def __init__(self, signal):
                 super().__init__()
-                self.text_widget = text_widget
+                self.signal = signal
                 self.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+                self.setLevel(logging.INFO)
             
             def emit(self, record):
                 msg = self.format(record)
-                # 使用QTimer确保线程安全
-                QTimer.singleShot(0, lambda: self.append_text(msg))
-            
-            def append_text(self, msg):
-                self.text_widget.append(msg)
-                # 保持最后200行
-                lines = self.text_widget.toPlainText().split('\n')
-                if len(lines) > 200:
-                    self.text_widget.setPlainText('\n'.join(lines[-200:]))
-                # 自动滚动到底部
-                cursor = self.text_widget.textCursor()
-                cursor.movePosition(cursor.End)
-                self.text_widget.setTextCursor(cursor)
+                self.signal.emit(msg)
         
-        handler = TextEditHandler(self.log_text)
-        logger = logging.getLogger()
+        # 添加自定义处理器
+        handler = SignalLogHandler(self.signals.log_signal)
         logger.addHandler(handler)
+        
+        # 同时添加控制台处理器以便调试
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
     
     def refresh_midi_ports(self):
         """刷新MIDI端口列表"""
@@ -174,13 +189,45 @@ class MainWindow(QMainWindow):
                 break
     
     def status_callback(self, message):
-        """状态回调函数"""
-        QTimer.singleShot(0, lambda: self.status_label.setText(message))
+        """状态回调函数 - 从BLE线程调用"""
+        self.signals.status_signal.emit(message)
     
     def activity_callback(self, message):
-        """MIDI活动回调函数"""
+        """MIDI活动回调函数 - 从BLE线程调用"""
+        self.signals.activity_signal.emit(message)
+    
+    def update_status_ui(self, message):
+        """更新状态UI - 在主线程中执行"""
+        self.status_label.setText(message)
+        # 自动添加到日志
+        self.update_log_ui(f"状态: {message}")
+    
+    def update_activity_ui(self, message):
+        """更新活动UI - 在主线程中执行"""
         timestamp = time.strftime("%H:%M:%S")
-        QTimer.singleShot(0, lambda: self.activity_text.append(f"[{timestamp}] {message}"))
+        self.activity_text.append(f"[{timestamp}] {message}")
+        # 限制活动记录数量
+        lines = self.activity_text.toPlainText().split('\n')
+        if len(lines) > 50:
+            self.activity_text.setPlainText('\n'.join(lines[-50:]))
+        
+        # 自动滚动到底部
+        cursor = self.activity_text.textCursor()
+        cursor.movePosition(cursor.End)
+        self.activity_text.setTextCursor(cursor)
+    
+    def update_log_ui(self, message):
+        """更新日志UI - 在主线程中执行"""
+        self.log_text.append(message)
+        # 保持最后200行
+        lines = self.log_text.toPlainText().split('\n')
+        if len(lines) > 200:
+            self.log_text.setPlainText('\n'.join(lines[-200:]))
+        
+        # 自动滚动到底部
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(cursor.End)
+        self.log_text.setTextCursor(cursor)
     
     def start_bridge(self):
         """启动BLE桥接器"""
@@ -191,11 +238,11 @@ class MainWindow(QMainWindow):
         midi_port = self.midi_port_combo.currentText()
         
         if not device_name:
-            self.status_label.setText("❌ 请输入设备名称")
+            self.update_status_ui("❌ 请输入设备名称")
             return
         
         if not midi_port:
-            self.status_label.setText("❌ 请选择MIDI输出端口")
+            self.update_status_ui("❌ 请选择MIDI输出端口")
             return
         
         self.is_running = True
@@ -219,27 +266,28 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.status_callback(f"❌ 桥接器错误: {e}")
             finally:
-                self.bridge_loop.close()
+                if self.bridge_loop and not self.bridge_loop.is_closed():
+                    self.bridge_loop.close()
                 QTimer.singleShot(0, self.on_bridge_stopped)
         
         self.bridge_thread = threading.Thread(target=run_bridge, daemon=True)
         self.bridge_thread.start()
         
-        self.status_callback("🚀 启动BLE MIDI桥接器...")
+        self.update_status_ui("🚀 启动BLE MIDI桥接器...")
     
     def stop_bridge(self):
         """停止BLE桥接器"""
         self.is_running = False
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_callback("⏹️ 正在停止桥接器...")
+        self.update_status_ui("⏹️ 正在停止桥接器...")
     
     def on_bridge_stopped(self):
         """桥接器停止后的回调"""
         self.is_running = False
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_label.setText("已停止")
+        self.update_status_ui("已停止")
     
     def closeEvent(self, event):
         """关闭窗口事件"""
