@@ -1,0 +1,6 @@
+{
+    "device_name": "FP-18",
+    "midi_port": "loopMIDI ToSeeMusic",
+    "auto_reconnect": true,
+    "scan_interval": 5
+}
