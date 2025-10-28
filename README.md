@@ -1,4 +1,3 @@
-```markdown
 # BLE MIDI 转发器
 
 一个通用的蓝牙BLE MIDI转发工具，可将任何支持BLE MIDI的设备的MIDI信号稳定转发到虚拟MIDI端口，解决常规软件断连问题。
